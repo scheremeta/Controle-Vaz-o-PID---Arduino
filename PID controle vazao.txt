@@ -1,0 +1,187 @@
+#include <LiquidCrystal.h>
+
+//#### Flags
+bool FirstRun=1;
+
+//#### Flow Rate Sensor
+byte FRS_Interrupt = 0;
+const int FRS_Pulse = 2;
+float FRS_CalibrCoef = 6.64;
+
+volatile byte pulseCount;  
+float flowRate;
+unsigned int flowMilliLitres;
+unsigned long totalMilliLitres;
+unsigned long oldTime;
+unsigned long deltaTime;
+
+//#### Stepper Motor
+const int Stepper_Step = 3;
+const int Stepper_Dir = 5;
+const int Stepper_MaxPulses = 1000;
+int Stepper_Pos;
+
+//#### PID Controller
+double P=0, I=0, P_I=0;
+double kp =1;
+double ki =0.03;
+double error=0;
+double Setpoint=0;
+double lastF;
+long lastT=0;
+
+//#### Display
+LiquidCrystal lcd(12, 11, 10, 9, 8, 7);
+
+//#### Setpoint
+#define Pot = A1;
+float SetP= 0;
+
+//#### Operation
+
+const int Op = 6;
+int Select_PID= 0;
+
+
+void setup() {
+
+  
+  //#### Flow Rate Sensor
+  pinMode(FRS_Pulse, INPUT);
+  digitalWrite(FRS_Pulse, HIGH);
+
+  pulseCount        = 0;
+  flowRate          = 0.0;
+  flowMilliLitres   = 0;
+  totalMilliLitres  = 0;
+  oldTime           = 0;
+
+  attachInterrupt(FRS_Interrupt, FRS_PulseCounter, FALLING);
+  
+  //#### Stepper Motor
+  pinMode(Stepper_Step, OUTPUT);
+  pinMode(Stepper_Dir, OUTPUT);
+
+  //#### Display
+  lcd.begin(16, 2);
+
+  //#### Operation
+  pinMode(Op, INPUT);
+  
+  Serial.begin(9600);
+}
+//#### Flow Rate Sensor
+float FRS_Read() {
+   
+   if((millis() - oldTime) > 1000)    
+  {
+    detachInterrupt(FRS_Interrupt);
+    deltaTime=millis();
+    flowRate = ((1000.0 / (millis() - oldTime)) * pulseCount) / FRS_CalibrCoef;
+    oldTime = millis();
+    flowMilliLitres = (flowRate / 60) * 1000;
+    totalMilliLitres += flowMilliLitres; 
+    unsigned int frac;
+    pulseCount = 0;
+    attachInterrupt(FRS_Interrupt, FRS_PulseCounter, FALLING);
+   
+    return (flowRate);
+  
+  }
+}
+
+void FRS_PulseCounter() {
+  pulseCount++;
+}
+
+//#### Stepper Motor
+void Stepper_Move(double SM_Input){    
+  
+  double Next_Pos=SM_Input;
+
+    if (Next_Pos<0){digitalWrite(Stepper_Dir,HIGH); Next_Pos=Next_Pos*(-1);}
+  else{digitalWrite(Stepper_Dir,LOW);}
+                     
+  int pulses = map(Next_Pos,0,1000,0,Stepper_MaxPulses);
+     
+    for(int x = 0; x < pulses; x++) {
+      digitalWrite(Stepper_Step,HIGH); 
+      delayMicroseconds(2000); 
+      digitalWrite(Stepper_Step,LOW); 
+      delayMicroseconds(2000); 
+
+    }
+ 
+    Serial.print(" ");
+    Serial.print(Next_Pos); 
+Serial.print(" ");
+  delay(750);
+  
+}
+
+void Init_Valve(){
+  Stepper_Move(-1000);
+  FirstRun=0;
+  delay(3000);
+}
+
+//#### PID Controller
+void myPID(){
+ error= (Setpoint - flowRate);
+float deltaT = (millis()-lastT)/1000.0;
+  lastT=millis();
+  //P
+  P= error*kp;
+  
+  //I
+  I += (error*ki)*deltaT;
+
+  //PI
+  P_I= P+I;
+  
+if ( error<0.1 && error>-0.1 ){ Stepper_Move(0);}
+  else{Stepper_Move(P_I);}
+
+  
+    Serial.println(flowRate);
+    Serial.print(" ");
+    Serial.print(error);  
+    Serial.print(" ");
+    Serial.print(Setpoint);
+    Serial.print(" ");
+     
+}
+
+//#### Display
+
+void Display(){
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("SF= ");
+  lcd.setCursor(4, 0);
+  lcd.print(flowRate);
+  lcd.setCursor(8, 0);
+  lcd.print("L/min");
+  lcd.setCursor(0, 1);
+  lcd.print("SetP= ");
+  lcd.setCursor(6, 1);
+  lcd.print(SetP);
+  lcd.setCursor(10, 1);
+  lcd.print("L/min");
+  }
+
+
+
+
+void loop() {
+ if (FirstRun==1){Init_Valve();}
+ FRS_Read();
+ Display();
+ SetP = analogRead(A1);
+ SetP= map(SetP, 0, 1023, 0, 1000);
+ SetP = SetP/100;
+ Setpoint = SetP;
+ Select_PID = digitalRead(Op);
+ if (Select_PID==0){  myPID(); }
+  
+}
